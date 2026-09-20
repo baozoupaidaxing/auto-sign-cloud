@@ -164,7 +164,7 @@ common/api.js                 #   跨端统一 callFunction 封装
 
 1. **建公共模块**：右键 `uniCloud-aliyun/cloudfunctions/common/crypto-util`、`auth-util` → 上传公共模块
 2. **部署云函数**：`auto-sign`、`auto-sign-api` 分别上传部署（`auto-sign-api` 依赖公共模块，直接 `require('crypto-util')` / `require('auth-util')`）
-3. **配置密钥**：在 `auto-sign-api` 云函数环境变量设置 `AS_MASTER_KEY=64位hex`
+3. **配置密钥**：在 `auto-sign` 与 `auto-sign-api` **两个云函数的环境变量中都设置同一个** `AS_MASTER_KEY=64位hex`（两处值必须完全一致，否则加密/解密不匹配，线上会显示「未配置」或签到失败）
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
