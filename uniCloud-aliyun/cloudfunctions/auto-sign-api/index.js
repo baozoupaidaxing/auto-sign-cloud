@@ -18,8 +18,8 @@
  *   - 回传凭证一律脱敏(绝不回显明文)
  *   - 凭证 AES-256-GCM 加密后入库
  */
-const cc = require('../common/crypto-util');
-const auth = require('../common/auth-util');
+const cc = require('crypto-util');
+const auth = require('auth-util');
 
 const URL_BASE = 'http://api.uniCloud.aliyun.com/v3/index.html'; // 占位,实际由前端 SDK 调用
 const PLATFORMS = ['trae', 'workbuddy', 'qoder'];

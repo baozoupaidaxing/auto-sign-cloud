@@ -3,5 +3,8 @@
   "version": "2.0.0",
   "description": "签到管理面板后端 API",
   "main": "index.js",
-  "dependencies": {}
+  "dependencies": {
+    "crypto-util": "file:../common/crypto-util",
+    "auth-util": "file:../common/auth-util"
+  }
 }

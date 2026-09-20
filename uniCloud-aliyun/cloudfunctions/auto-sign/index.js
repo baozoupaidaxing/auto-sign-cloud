@@ -10,7 +10,7 @@
  */
 
 const https = require('https');
-const cc = require('../common/crypto-util'); // 凭证加解密(es5 公共模块)
+const cc = require('crypto-util'); // 凭证加解密(es5 公共模块)
 
 // ---------- 日志函数 ----------
 // uniCloud 会自动加 [autoSign][USER][INFO] 前缀,这里不再重复加

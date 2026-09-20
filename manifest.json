@@ -24,6 +24,9 @@
     },
     "h5" : {
         "title" : "签到管理面板",
+
+
+
         "router" : {
             "mode" : "hash",
             "base" : "/"
