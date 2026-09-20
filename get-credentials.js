@@ -522,6 +522,7 @@ if (require.main === module) {
       accessToken: trae.accessToken,
       deviceId: trae.deviceId
     };
+    const traeExp = jwtExp(trae.accessToken); if (traeExp && traeExp.exp) traeDoc.expires_at = traeExp.exp;
     if (trae.userId) traeDoc.userId = trae.userId;
     if (trae.host) traeDoc.host = trae.host;
     if (trae.userRegion) traeDoc.userRegion = trae.userRegion;
@@ -531,13 +532,14 @@ if (require.main === module) {
   if (wb) {
     out('-- 集合 auto_sign_config,_id = workbuddy 的记录(更新 accessToken;uid 通常不用变)--');
     const doc = { _id: 'workbuddy', enable: true, accessToken: wb.accessToken };
+    const wbExp = jwtExp(wb.accessToken); if (wbExp && wbExp.exp) doc.expires_at = wbExp.exp;
     if (wb.uid) doc.uid = wb.uid;
     out(JSON.stringify(doc, null, 2));
   }
   if (qoder) {
     out('');
     out('-- 集合 auto_sign_config,_id = qoder 的记录 --');
-    out(JSON.stringify({ _id: 'qoder', enable: true, accessToken: qoder.accessToken }, null, 2));
+    out(JSON.stringify({ _id: 'qoder', enable: true, accessToken: qoder.accessToken /* 非JWT,无有效期 */ }, null, 2));
   }
 
   fs.writeFileSync(OUT_FILE, lines.join('\n'), 'utf8');

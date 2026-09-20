@@ -35,6 +35,7 @@ export default {
   hasToken() { return !!uni.getStorageSync(TOKEN_KEY); },
   login(pwd) { return call('login', { password: pwd }, false); },
   status() { return call('status', {}); },
-  checkin(platform) { return call('checkin', { platform }); },
-  updateCredential(payload) { return call('credential', payload); }
+  checkin(p) { return p && Array.isArray(p) ? call('checkin', { platforms: p }) : call('checkin', { platform: p }); },
+  updateCredential(payload) { return call('credential', payload); },
+  importCredentials(config) { return call('import', { config }); }
 };

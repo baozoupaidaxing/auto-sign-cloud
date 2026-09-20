@@ -92,7 +92,9 @@ exports.main = async function (event, context) {
   const db = uniCloud.database();
   const configCol = db.collection('auto_sign_config');
 
-  const platforms = event && event.platform ? [event.platform] : ['trae', 'workbuddy', 'qoder'];
+  const statusOnly = event && event.mode === 'status';
+  const raw = event && event.platform;
+  const platforms = Array.isArray(raw) ? raw : (raw ? [raw] : ['trae', 'workbuddy', 'qoder']);
   const results = {};
 
   for (const platform of platforms) {
@@ -123,11 +125,11 @@ exports.main = async function (event, context) {
       }
       let result;
       if (platform === 'trae') {
-        result = await checkinTrae(cfg, db);
+        result = await checkinTrae(cfg, db, statusOnly);
       } else if (platform === 'workbuddy') {
-        result = await checkinWorkBuddy(cfg, db);
+        result = await checkinWorkBuddy(cfg, db, statusOnly);
       } else if (platform === 'qoder') {
-        result = await checkinQoder(cfg, db);
+        result = await checkinQoder(cfg, db, statusOnly);
       } else {
         result = { success: false, message: `未知平台: ${platform}` };
       }
@@ -147,7 +149,7 @@ exports.main = async function (event, context) {
 // 领取接口:GET /sash/api/v1/me/campaigns 拿活动列表(每天 campaignId 会变),
 //          然后 POST /sash/api/v1/me/campaigns/{campaignId}/claim 领取。
 // 仅需要 Bearer token + Cosy-ClientType:10,无设备签名头。
-async function checkinQoder(cfg, db) {
+async function checkinQoder(cfg, db, statusOnly) {
   if (!cfg.accessToken) throw new Error('缺少 accessToken');
 
   const base = 'https://openapi.qoder.com.cn';
@@ -164,6 +166,14 @@ async function checkinQoder(cfg, db) {
     ctHeaders
   );
   log(`[Qoder campaigns] ${JSON.stringify(list.json || list.raw)}`);
+  // statusOnly:先判断今日是否已签(claimable!=true 或无 CLAIMABLE 活动 => 已签)
+  if (statusOnly) {
+    const cl = (list.json && list.json.campaigns) || [];
+    const claimable = !!(list.json && list.json.claimable === true);
+    const hasClaimable = cl.some(c => c && c.actionType === 'CLAIM_BENEFIT' && c.claimStatus === 'CLAIMABLE');
+    const done = !claimable || !hasClaimable;
+    return { success: done, todayCheckedIn: done, message: done ? '今日已领取/无待领取' : '今日未签到' };
+  }
 
   if (!list.json || list.json.claimable !== true) {
     return { success: false, message: '今日无待领取活动或活动未开启' };
@@ -208,7 +218,7 @@ async function checkinQoder(cfg, db) {
 }
 
 // ---------- Trae 签到 ----------
-async function checkinTrae(cfg, db) {
+async function checkinTrae(cfg, db, statusOnly) {
   if (!cfg.accessToken) throw new Error('缺少 accessToken');
   if (!cfg.deviceId) throw new Error('缺少 deviceId');
 
@@ -242,8 +252,12 @@ async function checkinTrae(cfg, db) {
     return { success: false, message: '签到活动未开启' };
   }
 
-  // Trae 已签到:顶层 checked_in / did_checked_in
-  if (status.json.checked_in === true || status.json.did_checked_in === true) {
+  const traeDone = status.json.checked_in === true || status.json.did_checked_in === true;
+  if (statusOnly) {
+    if (traeDone) return { success: true, todayCheckedIn: true, message: '今日已签到' };
+    return { success: false, todayCheckedIn: false, message: '今日未签到' };
+  }
+  if (traeDone) {
     return { success: true, message: '今日已签到,跳过', alreadyCheckedIn: true };
   }
 
@@ -297,7 +311,7 @@ async function checkinTrae(cfg, db) {
 }
 
 // ---------- WorkBuddy 签到 ----------
-async function checkinWorkBuddy(cfg, db) {
+async function checkinWorkBuddy(cfg, db, statusOnly) {
   if (!cfg.accessToken) throw new Error('缺少 accessToken');
   if (!cfg.uid) throw new Error('缺少 uid');
 
@@ -324,8 +338,12 @@ async function checkinWorkBuddy(cfg, db) {
     return { success: false, message: '签到活动未开启' };
   }
 
-  // WorkBuddy 已签到:data.today_checked_in
-  if (status.json.data?.today_checked_in === true) {
+  const wbDone = status.json.data?.today_checked_in === true;
+  if (statusOnly) {
+    if (wbDone) return { success: true, todayCheckedIn: true, message: '今日已签到' };
+    return { success: false, todayCheckedIn: false, message: '今日未签到' };
+  }
+  if (wbDone) {
     return { success: true, message: '今日已签到,跳过', alreadyCheckedIn: true };
   }
 

@@ -21,7 +21,7 @@ uniCloud 定时云函数，自动签到三个平台并领取每日积分：
 
 ```
 auto-sign-cloud/
-├── uniCloud/                 # 云端资源（uniCloud 标准目录）
+├── uniCloud-aliyun/         # 云端资源（当前绑定阿里云空间；目录名随厂商变，见下）
 │   └── cloudfunctions/
 │       ├── auto-sign/        # 三平台定时签到云函数
 │       ├── auto-sign-api/    # 【v2】签到管理面板后端 API
@@ -126,7 +126,7 @@ auto-sign-cloud/
 ### 新增/改动文件
 
 ```
-uniCloud/cloudfunctions/
+uniCloud-aliyun/cloudfunctions/
 ├── common/
 │   ├── crypto-util/          # 【新增】公共模块：AES-256-GCM 加解密 / 口令哈希 / 会话token
 │   │   ├── index.js
@@ -162,7 +162,7 @@ common/api.js                 #   跨端统一 callFunction 封装
 
 > v2 是 uni-app + uniCloud 合并工程，请用 **HBuilderX** 打开本项目根目录。
 
-1. **建公共模块**：右键 `uniCloud/cloudfunctions/common/crypto-util`、`auth-util` → 上传公共模块
+1. **建公共模块**：右键 `uniCloud-aliyun/cloudfunctions/common/crypto-util`、`auth-util` → 上传公共模块
 2. **部署云函数**：`auto-sign`、`auto-sign-api` 分别上传部署（`auto-sign-api` 依赖公共模块，直接 `require('crypto-util')` / `require('auth-util')`）
 3. **配置密钥**：在 `auto-sign-api` 云函数环境变量设置 `AS_MASTER_KEY=64位hex`
    ```bash
@@ -183,3 +183,21 @@ v1 的 `get-credentials.js` 仍可直接读取本机三平台登录态。v2 面�
 
 - 签到失败看云函数 `auto-sign` 日志
 - 面板接口问题看 `auto-sign-api` 日志（返回 `code`：`0`成功/`401`未登录/`400`参数错/`403`未初始化/`404`未知动作/`500`内部错）
+### v2 面板交互增强
+
+- **状态查询（方案 B）**：默认读数据库缓存日志，今日无记录才实时查平台 status 接口；真已签则兜底回写今日 `sign_log`，供下次直接读缓存 —— 既准确又省配额。
+- **已签不重复执行**：全部/手动签到对已签的平台自动跳过；全部已签时「全部签到」按钮置灰。批量签到时只对「已配置、启用、未签」的平台发起，避免浪费。
+- **凭证有效期提醒**：Trae / WorkBuddy token 为 JWT，由 `get-credentials.js` 输出（或后端从 token 解析）存入 `auto_sign_config.expires_at`，仪表盘凭证旁显示“剩 X 天 / 今日到期”；Qoder token 非 JWT（27 位随机串）无到期信息，恒显示“有效期未知”。
+- **一键 JSON 批量导入**：`一键获取签到凭证.bat` 的输出整体复制到「更新凭证」页 JSON 框，一次更新三平台；勾选自动识别并跳过无效/过短的 token。
+- **刷新限频**：仪表盘「刷新」按钮 1 分钟最多点一次，控制云函数调用量。
+
+### v2 仪表盘状态判定（方案 B 时序）
+
+```
+进入/刷新
+ └→ 查 sign_log 今日(platform,date)记录
+       ├─ 今日有成功记录 → 显示“今日已签”(只读库,不烧接口)
+       └─ 无 → 一次性实时查 auto-sign(mode:status)
+                 ├─ 真已签 → upsert 补写今日记录 → “今日已签”
+                 └─ 未签 → “待签到”(不写记录)
+```
