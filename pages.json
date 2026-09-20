@@ -1,4 +1,4 @@
-﻿{
+{
   "pages": [
     { "path": "pages/login/login", "style": { "navigationBarTitleText": "登录", "navigationStyle": "custom", "backgroundColor": "#1a2a6c" } },
     { "path": "pages/dashboard/dashboard", "style": { "navigationBarTitleText": "签到面板", "navigationStyle": "custom", "backgroundColor": "#f4f6fb" } },

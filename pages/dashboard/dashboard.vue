@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page">
     <view class="header">
       <view class="h-title">签到状态</view>

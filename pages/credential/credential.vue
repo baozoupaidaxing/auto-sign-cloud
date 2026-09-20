@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page">
     <view class="card">
       <view class="title">{{ nameOf(platform) }} · 更新凭证</view>

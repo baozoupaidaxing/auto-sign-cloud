@@ -1,32 +1,42 @@
-﻿{
-    "name": "auto-sign-dashboard",
-    "appid": "",
-    "description": "Trae/WorkBuddy/Qoder 签到管理面板",
-    "versionName": "2.0.0",
-    "versionCode": "200",
-    "transformPx": false,
-    "app-plus": {
-        "usingComponents": true,
-        "nvueStyleCompiler": "uni-app",
-        "compilerVersion": 3
+{
+    "name" : "auto-sign-dashboard",
+    "appid" : "__UNI__7FD496E",
+    "description" : "Trae/WorkBuddy/Qoder 签到管理面板",
+    "versionName" : "2.0.0",
+    "versionCode" : "200",
+    "transformPx" : false,
+    "app-plus" : {
+        "usingComponents" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "compilerVersion" : 3
     },
-    "quickapp": {},
-    "mp-weixin": {
-        "appid": "",
-        "setting": { "urlCheck": false, "es6": true },
-        "usingComponents": true
+    "quickapp" : {},
+    "mp-weixin" : {
+        "appid" : "",
+        "setting" : {
+            "urlCheck" : false,
+            "es6" : true
+        },
+        "usingComponents" : true
     },
-    "mp-alipay": { "usingComponents": true },
-    "h5": {
-        "title": "签到管理面板",
-        "router": { "mode": "hash", "base": "/" },
-        "sdkConfigs": {}
+    "mp-alipay" : {
+        "usingComponents" : true
     },
-    "uniStatistics": { "enable": false },
-    "vueVersion": "2",
-    "uniCloud": {
-        "provider": "aliyun",
-        "spaceId": "",
-        "clientSecret": ""
+    "h5" : {
+        "title" : "签到管理面板",
+        "router" : {
+            "mode" : "hash",
+            "base" : "/"
+        },
+        "sdkConfigs" : {}
+    },
+    "uniStatistics" : {
+        "enable" : false
+    },
+    "vueVersion" : "2",
+    "uniCloud" : {
+        "provider" : "aliyun",
+        "spaceId" : "",
+        "clientSecret" : ""
     }
 }

@@ -1,5 +1,8 @@
-﻿import App from './App.vue';
+import Vue from 'vue';
+import App from './App';
 import './uni.scss';
+
 App.mpType = 'app';
-const app = new App();
+
+const app = new Vue({ ...App });
 app.$mount();

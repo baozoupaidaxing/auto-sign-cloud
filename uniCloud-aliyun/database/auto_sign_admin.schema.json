@@ -1,0 +1,17 @@
+{
+  "bsonType": "object",
+  "description": "管理模式 settings + sessions（_id 区分）",
+  "permission": {
+    "read": false,
+    "create": false,
+    "update": false,
+    "delete": false
+  },
+  "properties": {
+    "_id": {},
+    "adminTokenHash": { "bsonType": "string", "description": "管理口令哈希（settings）" },
+    "token": { "bsonType": "string", "description": "会话 token（sessions）" },
+    "expiry": { "bsonType": "int", "description": "会话过期时间戳（sessions）" },
+    "created_at": { "bsonType": "int" }
+  }
+}

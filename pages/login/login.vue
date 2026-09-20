@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="login-wrap">
     <view class="card">
       <view class="title">签到管理面板</view>

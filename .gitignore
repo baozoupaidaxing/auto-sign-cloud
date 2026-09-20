@@ -1,4 +1,4 @@
-﻿# 敏感凭证:含真实 token,严禁提交
+# 敏感凭证:含真实 token,严禁提交
 签到凭证.txt
 *.txt
 
@@ -8,3 +8,13 @@ qoder-claim.js
 
 # Node
 node_modules/
+# HBuilderX / uni-app 运行时产物
+unpackage/
+.hbuilderx/
+uni_modules/
+
+# uniCloud 厂商目录下的依赖
+uniCloud-*/cloudfunctions/**/node_modules/
+
+# 通用云目录的重复 schema 不入库(schema 以厂商目录 uniCloud-xxx/database 为准)
+uniCloud/database/

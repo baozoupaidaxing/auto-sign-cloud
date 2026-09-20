@@ -1,0 +1,21 @@
+{
+  "bsonType": "object",
+  "permission": {
+    "read": false,
+    "create": false,
+    "update": false,
+    "delete": false
+  },
+  "properties": {
+    "_id": {},
+    "platform": { "bsonType": "string" },
+    "success": { "bsonType": "bool" },
+    "message": { "bsonType": "string" },
+    "date": { "bsonType": "string" },
+    "created_at": { "bsonType": "int" },
+    "points": { "bsonType": "double", "description": "可选：积分" },
+    "credit": { "bsonType": "double", "description": "可选：积分" },
+    "streak": { "bsonType": "int", "description": "可选：连签天数" },
+    "count": { "bsonType": "int", "description": "可选：Qoder 领取项数" }
+  }
+}

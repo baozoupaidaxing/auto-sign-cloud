@@ -1,4 +1,4 @@
-﻿# auto-sign-cloud
+# auto-sign-cloud
 
 uniCloud 定时云函数，自动签到三个平台并领取每日积分：
 
@@ -39,6 +39,20 @@ auto-sign-cloud/
 ├── 一键获取签到凭证.bat       # 双击运行 get-credentials.js
 └── README.md
 ```
+
+## 云厂商与目录名
+
+本项目保持**云厂商无关**（云函数只调用 uniCloud 标准 API，不绑定厂商 SDK）。但 HBuilderX 的云目录名**由你关联的服务空间厂商决定**：
+
+| 关联的空间 | HBuilderX 生成的云目录 |
+|-----------|----------------------|
+| 阿里云 | `uniCloud-aliyun/` |
+| 支付宝云 | `uniCloud-alipay/` |
+| 腾讯云 | `uniCloud-tencent/` |
+
+- 本仓库 git 显示的 `uniCloud-aliyun/` 表示**当前绑定的是阿里云空间**；换厂商后该目录会被 HBuilderX 自动改成 `uniCloud-<厂商>/`。
+- 换厂商时：在 HBuilderX 重新“关联新服务空间”，HBuilderX 会生成对应新目录名的云目录，**用同一套源码重新上传云函数 / 公共模块 / schema 即可**，代码无需改动。
+- 数据库初始化用 **当前厂商目录下的 `database/*.schema.json`**。
 
 ## 工作原理
 

@@ -1,0 +1,30 @@
+{
+  "bsonType": "object",
+  "required": ["_id"],
+  "permission": {
+    "read": false,
+    "create": false,
+    "update": false,
+    "delete": false
+  },
+  "properties": {
+    "_id": { "description": "文档标识：trae/workbuddy/qoder" },
+    "enable": { "bsonType": "bool", "description": "是否启用签到" },
+    "enc": {
+      "bsonType": "object",
+      "description": "加密后的凭证（AES-256-GCM），不存明文 token",
+      "properties": {
+        "alg": { "bsonType": "string" },
+        "iv": { "bsonType": "string" },
+        "data": { "bsonType": "string" }
+      }
+    },
+    "accessToken": { "bsonType": "string", "description": "【兼容】v1 旧明文凭证（新写入不使用，仅存量迁移用）" },
+    "deviceId": { "bsonType": "string" },
+    "uid": { "bsonType": "string" },
+    "userId": { "bsonType": "string" },
+    "host": { "bsonType": "string" },
+    "userRegion": { "bsonType": "string" },
+    "updated_at": { "bsonType": "int" }
+  }
+}

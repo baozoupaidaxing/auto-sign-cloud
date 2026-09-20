@@ -1,4 +1,4 @@
-﻿// 跨端统一请求封装:小程序与 H5 都通过 uniCloud.callFunction 调用 auto-sign-api
+// 跨端统一请求封装:小程序与 H5 都通过 uniCloud.callFunction 调用 auto-sign-api
 // (同一 AppId 下 callFunction 即可,无需额外域名配置,省资源)
 const TOKEN_KEY = 'as_token';
 
