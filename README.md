@@ -1,4 +1,105 @@
-﻿
+﻿# auto-sign-cloud
+
+uniCloud 定时云函数，自动签到三个平台并领取每日积分：
+
+- **Trae SOLO CN**（`trae`）
+- **WorkBuddy / CodeBuddy CN**（`workbuddy`）
+- **Qoder CN**（`qoder`）
+
+零依赖、零第三方包，仅用 Node 内置模块 + Windows 自带 PowerShell（DPAPI）。
+
+---
+
+## 版本/分支
+
+| 分支 | 说明 |
+|------|------|
+| `master`（v1.x） | 纯定时签到，稳定，持续可维护（tag `v1.0.0` 为可回滚快照基线，**非冻结**） |
+| `v2` | 在 master 基础上＋uniapp 可视化面板，开发完成后可合并回 master 打 `v2.0.0` |
+
+## 目录结构（v2 合并工程）
+
+```
+auto-sign-cloud/
+├── uniCloud/                 # 云端资源（uniCloud 标准目录）
+│   └── cloudfunctions/
+│       ├── auto-sign/        # 三平台定时签到云函数
+│       ├── auto-sign-api/    # 【v2】签到管理面板后端 API
+│       └── common/           # 公共模块
+│           ├── crypto-util/  # 【v2】AES-256-GCM 加解密
+│           └── auth-util/    # 【v2】口令 + 会话
+├── pages/                    # 【v2】uniapp 页面（H5 + 小程序）
+│   ├── login/                #   登录（首次自动初始化口令）
+│   ├── dashboard/            #   三平台状态 + 手动签到
+│   └── credential/           #   更新凭证（加密提交）
+├── common/                   # 【v2】前端公共请求封装
+│   └── api.js
+├── pages.json / manifest.json / main.js / App.vue / uni.scss   # uniapp 根配置
+├── get-credentials.js        # 一键读取本机三平台凭证（本地运行）
+├── 一键获取签到凭证.bat       # 双击运行 get-credentials.js
+└── README.md
+```
+
+## 工作原理
+
+| 平台 | 凭证存放位置 | 鉴权方式 |
+|------|-------------|----------|
+| Trae | `%APPDATA%\TRAE SOLO CN\...\storage.json`（envelope 加密） | `Cloud-IDE-JWT <token>` + `x-device-id` |
+| WorkBuddy | `%APPDATA%\CodeBuddy CN\...\state.vscdb`（OSCrypt） | `Bearer <token>` + `X-User-Id` |
+| Qoder | `%APPDATA%\QoderCN\...\state.vscdb`（OSCrypt） | `Bearer <token>` + `Cosy-ClientType: 10` |
+
+- **Trae**：`POST /trae/api/v2/ug/checkin_credits/claim`，body `{req_source:1}`，请求带 `X-User-Region` 头（缺失会导致 9074 风控）
+- **WorkBuddy**：`POST /v2/billing/meter/daily-checkin`
+- **Qoder**：先 `GET /sash/api/v1/me/campaigns` 查活动（每日 10:00 刷新新 campaignId），再 `POST /sash/api/v1/me/campaigns/{campaignId}/claim` 领取
+
+## v1 部署步骤
+
+> ⚠️ 凭证敏感，请在所有主机上始终先导入凭证再部署。
+
+### 1. 获取凭证
+
+双击 `一键获取签到凭证.bat`（或 `node get-credentials.js`）。脚本会：
+1. 读取本机三平台本地登录态的 token
+2. 调用各平台查询接口校验有效性 + 显示过期时间
+3. 生成 `auto_sign_config` 集合的三条配置 JSON，写入 `签到凭证.txt`（已 gitignore，不会入库）并复制到剪贴板
+
+### 2. 配置 uniCloud 数据库
+
+在 uniCloud 数据库建 **`auto_sign_config`** 集合，插入 3 条记录（`_id` 分别为 `trae` / `workbuddy` / `qoder`），字段来自脚本输出：
+
+```jsonc
+// _id: "trae"
+{ "_id": "trae", "enable": true, "accessToken": "<token>", "deviceId": "<deviceId>", "userId": "<userId>", "host": "https://api.trae.cn", "userRegion": "CN" }
+// _id: "workbuddy"
+{ "_id": "workbuddy", "enable": true, "accessToken": "<token>", "uid": "<uid>" }
+// _id: "qoder"
+{ "_id": "qoder", "enable": true, "accessToken": "<token>" }
+```
+
+### 3. 部署云函数 + 配置定时触发器
+
+1. 新建云函数 `auto-sign`，把 `uniCloud/cloudfunctions/auto-sign/index.js` 内容粘贴部署
+2. 建定时触发器（cron）
+
+> ⚠️ **Qoder 每日 10:00（UTC+8）刷新活动**，Trigger 必须设在 10:00 之后。建议 `0 3 20 * * *`（阿里云 / UTC 20:00 = 北京 04:00）视时钟而定，**确保在北京时间 10:05 后运行**。
+
+## 定时说明
+
+| 平台 | 每日刷新点 |
+|------|-----------|
+| Trae | 北京时间 00:00 |
+| WorkBuddy | 北京时间 00:00 |
+| Qoder | **北京时间 10:00** |
+
+## 签到日志
+
+云函数将结果写入 **`sign_log`** 集合（`platform` / `success` / `message` / `date`）。
+
+## 说明
+
+- token 会过期。重新运行 `一键获取签到凭证.bat` 并更新数据库即可续期。
+- 已签到 / 已领取会跳过（幂等），不会重复调用。
+
 ---
 
 ## 🆕 v2：可视化签到管理面板（uniapp）
@@ -8,17 +109,10 @@
 - 凭证失效时**直接在网页上输入新凭证**（加密存储，不回显明文）
 - **手动触发**签到云函数
 
-### 分支说明
-
-| 分支 | 说明 |
-|------|------|
-| `master`（v1.x） | 纯定时签到，稳定，持续可维护（tag `v1.0.0` 为可回滚快照基线，**非冻结**） |
-| `v2` | 在 master 基础上＋面板，开发完成后可合并回 master 打 `v2.0.0` |
-
 ### 新增/改动文件
 
 ```
-cloudfunctions/
+uniCloud/cloudfunctions/
 ├── common/
 │   ├── crypto-util/          # 【新增】公共模块：AES-256-GCM 加解密 / 口令哈希 / 会话token
 │   │   ├── index.js
@@ -28,13 +122,13 @@ cloudfunctions/
 │       └── package.json
 ├── auto-sign/                # 【改造】导入 crypto-util，cfg.enc 存在则解密凭证（兼容旧明文）
 │   └── index.js
-└── auto-sign-api/            # 【新增】URL化/云函数 API：login/status/checkin/credential
+└── auto-sign-api/            # 【新增】云函数 API：login/status/checkin/credential
     └── index.js
-uni-app/                      # 【新增】uniapp 面板（H5 + 微信小程序）
-├── pages/login/              #   口令登录页（首次自动初始化口令）
-├── pages/dashboard/          #   三平台状态 + 手动签到 + 更新入口
-├── pages/credential/         #   更新凭证页（加密提交）
-└── common/api.js             #   跨端统一 callFunction 封装
+pages/                        # 【新增】uniapp 面板（H5 + 微信小程序）
+├── login/                    #   口令登录页（首次自动初始化口令）
+├── dashboard/                #   三平台状态 + 手动签到 + 更新入口
+└── credential/               #   更新凭证页（加密提交）
+common/api.js                 #   跨端统一 callFunction 封装
 ```
 
 ### 安全设计
@@ -52,8 +146,10 @@ uni-app/                      # 【新增】uniapp 面板（H5 + 微信小程序
 
 ### v2 部署步骤（HBuilderX + uniCloud）
 
-1. **建公共模块**：将 `cloudfunctions/common/crypto-util`、`auth-util` 上传为 uniCloud 公共模块（右键“上传公共模块”）
-2. **部署云函数**：`auto-sign`、`auto-sign-api` 分别创建并上传（`auto-sign-api` 依赖公共模块，直接 `require('crypto-util')` / `require('auth-util')`）
+> v2 是 uni-app + uniCloud 合并工程，请用 **HBuilderX** 打开本项目根目录。
+
+1. **建公共模块**：右键 `uniCloud/cloudfunctions/common/crypto-util`、`auth-util` → 上传公共模块
+2. **部署云函数**：`auto-sign`、`auto-sign-api` 分别上传部署（`auto-sign-api` 依赖公共模块，直接 `require('crypto-util')` / `require('auth-util')`）
 3. **配置密钥**：在 `auto-sign-api` 云函数环境变量设置 `AS_MASTER_KEY=64位hex`
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -61,7 +157,7 @@ uni-app/                      # 【新增】uniapp 面板（H5 + 微信小程序
 4. **首次登录初始化**：打开 H5 网页 → 输入口令登录（首次自动把该口令设为管理员口令，请牢记）
 5. **导入/更新凭证**：在网页“更新凭证”页粘贴各平台 token（可配合 v1 的 `一键获取签到凭证.bat` 读取，再手动填入）
 6. **手动签到/看状态**：仪表盘一键查看与触发
-7. **uniCloud 前端网页托管 / 小程序**：用 HBuilderX 发布“网页托管”重建 H5；小程序用 `uniCloud.callFunction` 无需额外域名配置
+7. **发布**：H5 用 uniCloud 前端网页托管；小程序用 `uniCloud.callFunction` 无需额外域名配置
 
 > ⚠️ 资源配额：面板状态查询默认读数据库缓存日志，不做高频轮询；实时接口仅在你点“刷新 / 手动签到”时触发，注意关注免费版每日云函数调用与前端访问量限额。
 
