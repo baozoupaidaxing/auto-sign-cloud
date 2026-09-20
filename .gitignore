@@ -1,0 +1,10 @@
+﻿# 敏感凭证:含真实 token,严禁提交
+签到凭证.txt
+*.txt
+
+# 临时/调试脚本
+_scan_*.js
+qoder-claim.js
+
+# Node
+node_modules/
