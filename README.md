@@ -208,9 +208,9 @@ v1 的 `get-credentials.js` 仍可直接读取本机三平台登录态。v2 面�
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡，你的支持是我持续维护的动力 👇
 
 <p align="center">
-  <img src="./docs/images/alipay.png" width="320" alt="支付宝赞助" />
+  <img src="./docs/images/alipay.webp" width="320" alt="支付宝赞助" />
   &nbsp;&nbsp;
-  <img src="./docs/images/wechat.png" width="320" alt="微信赞助" />
+  <img src="./docs/images/wechat.webp" width="320" alt="微信赞助" />
 </p>
 
 <p align="center">

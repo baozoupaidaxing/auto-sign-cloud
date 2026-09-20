@@ -18,3 +18,6 @@ uniCloud-*/cloudfunctions/**/node_modules/
 
 # 通用云目录的重复 schema 不入库(schema 以厂商目录 uniCloud-xxx/database 为准)
 uniCloud/database/
+
+# 废弃旧厂商目录残留(当前用 uniCloud-aliyun/database)
+uniCloud/
