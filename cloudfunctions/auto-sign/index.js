@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /**
  * autoSign 云函数 - Trae + WorkBuddy 自动签到
  *
@@ -10,6 +10,7 @@
  */
 
 const https = require('https');
+const cc = require('crypto-util'); // 凭证加解密(es5 公共模块)
 
 // ---------- 日志函数 ----------
 // uniCloud 会自动加 [autoSign][USER][INFO] 前缀,这里不再重复加
@@ -110,6 +111,16 @@ exports.main = async function (event, context) {
         continue;
       }
 
+      // 凭证加密兼容:若存在 enc 字段(加密存储),解密覆盖 accessToken;否则沿用旧明文
+      if (cfg.enc) {
+        const dec = cc.decryptText(cfg.enc);
+        if (dec) cfg.accessToken = dec;
+        else {
+          results[platform] = { success: false, message: `${platform} 凭证解密失败(密钥不匹配或数据损坏)` };
+          log(`[结果] ${platform}: 凭证解密失败`);
+          continue;
+        }
+      }
       let result;
       if (platform === 'trae') {
         result = await checkinTrae(cfg, db);
