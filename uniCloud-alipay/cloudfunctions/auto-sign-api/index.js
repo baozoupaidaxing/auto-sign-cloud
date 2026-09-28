@@ -24,6 +24,9 @@ const auth = require('auth-util');
 const URL_BASE = 'http://api.uniCloud.aliyun.com/v3/index.html'; // 占位,实际由前端 SDK 调用
 const PLATFORMS = ['trae', 'workbuddy', 'qoder'];
 
+// 今日日期(北京时间 UTC+8):云函数容器为 UTC,直接 toISOString 在 00:00~08:00 会得到"昨天",导致方案B缓存失效
+const todayCN = () => new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
 // ---------- 响应封装 ----------
 function ok(data, message = 'ok') { return { code: 0, message, data }; }
 function fail(code, message, data) { return { code, message, data }; }
@@ -87,7 +90,7 @@ async function doLogin(body) {
 async function doStatus(db) {
   const configCol = db.collection('auto_sign_config');
   const logCol = db.collection('sign_log');
-  const today = new Date().toISOString().slice(0, 10); // 今日日期 YYYY-MM-DD
+  const today = todayCN(); // 今日日期 YYYY-MM-DD(北京时间)
   const list = [];
   const needLive = []; // 无今日成功记录、且已配置启用的平台 → 需实时查
 
@@ -125,10 +128,10 @@ async function doStatus(db) {
     list.push(item);
   }
 
-  // 3) 兜底:一次实时查(auto-sign mode:status,覆盖 needLive 全部),真签了回写今日记录供下次缓存
+  // 3) 兜底:一次实时查(auto-sign mode:status,仅查 needLive 平台,不再全量烧三平台),真签了回写今日记录供下次缓存
   if (needLive.length) {
     try {
-      const res = await uniCloud.callFunction({ name: 'auto-sign', data: { mode: 'status' } });
+      const res = await uniCloud.callFunction({ name: 'auto-sign', data: { mode: 'status', platform: needLive } });
       const st = (res.result && res.result.data) || {};
       for (const p of needLive) {
         const s = st[p];
@@ -163,22 +166,17 @@ async function doCheckin(body) {
   const plat = (body && body.platform) || null;
   const plats = (body && body.platforms) || null;
   const data = plats ? { platform: plats } : (plat ? { platform: plat } : {});
-  const req = uniCloud.callFunction({ name: 'auto-sign', data });
-  const res = await req;
+  const res = await uniCloud.callFunction({ name: 'auto-sign', data });
   const r = res.result;
   if (!r) return fail(500, 'auto-sign 无响应');
   if (r.code === 0) {
     // 透传各平台真实结果,让前端能显示真实成功/失败原因
     const data = r.data || {};
     let okCount = 0, failCount = 0;
-    const details = (Object.keys(data)||[]).map(p => {
-      const it = data[p];
-      if (it && it.success) okCount++; else failCount++;
-      const name = { trae:'Trae', workbuddy:'WorkBuddy', qoder:'Qoder' }[p] || p;
-      return `${name}:${it ? (it.alreadyCheckedIn ? '已签到' : (it.success ? '成功' : '失败')) : '无响应'}`;
-    });
-    const msg = details.length ? details.join('; ') : '签到完成';
-    return ok(data, (okCount + failCount) ? `签到完成(${okCount}成功/${failCount}失败)` : '签到完成', );
+    for (const p of Object.keys(data)) {
+      if (data[p] && data[p].success) okCount++; else failCount++;
+    }
+    return ok(data, (okCount + failCount) ? `签到完成(${okCount}成功/${failCount}失败)` : '签到完成');
   }
   return fail(500, (r.message || '签到失败') + ':' + JSON.stringify(r));
 }

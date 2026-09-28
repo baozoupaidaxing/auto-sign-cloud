@@ -1,0 +1,7 @@
+{
+  "name": "auth-util",
+  "main": "index.js",
+  "dependencies": {
+    "crypto-util": "file:../crypto-util"
+  }
+}

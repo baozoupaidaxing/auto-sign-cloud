@@ -10,8 +10,11 @@ const crypto = require('crypto');
 
 // 部署前务必设置 AS_MASTER_KEY! 生成示例:
 //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-const MASTER_KEY_HEX = process.env.AS_MASTER_KEY
-  || '0000000000000000000000000000000000000000000000000000000000000000';
+// 未设置时直接报错,杜绝静默回退占位密钥导致凭证被弱密钥加密的隐性事故
+if (!process.env.AS_MASTER_KEY) {
+  throw new Error('缺少环境变量 AS_MASTER_KEY(64 位 hex)。生成: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+}
+const MASTER_KEY_HEX = process.env.AS_MASTER_KEY;
 const MASTER_KEY = Buffer.from(MASTER_KEY_HEX, 'hex');
 if (MASTER_KEY.length !== 32) {
   throw new Error('AS_MASTER_KEY 必须为 32 字节(64 位十六进制)');

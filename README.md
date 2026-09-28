@@ -35,7 +35,7 @@ uniCloud 定时云函数，自动签到三个平台并领取每日积分：
 
 ```
 auto-sign-cloud/
-├── uniCloud-aliyun/         # 云端资源（当前绑定阿里云空间；目录名随厂商变，见下）
+├── uniCloud-alipay/         # 云端资源（当前绑定支付宝云空间；目录名随厂商变，见下）
 │   └── cloudfunctions/
 │       ├── auto-sign/        # 三平台定时签到云函数
 │       ├── auto-sign-api/    # 【v2】签到管理面板后端 API
@@ -64,7 +64,7 @@ auto-sign-cloud/
 | 支付宝云 | `uniCloud-alipay/` |
 | 腾讯云 | `uniCloud-tencent/` |
 
-- 本仓库 git 显示的 `uniCloud-aliyun/` 表示**当前绑定的是阿里云空间**；换厂商后该目录会被 HBuilderX 自动改成 `uniCloud-<厂商>/`。
+- 本仓库 git 显示的 `uniCloud-alipay/` 表示**当前绑定的是支付宝云空间**（历史上曾用阿里云 `uniCloud-aliyun/`）；换厂商后该目录会被 HBuilderX 自动改成 `uniCloud-<厂商>/`。
 - 换厂商时：在 HBuilderX 重新“关联新服务空间”，HBuilderX 会生成对应新目录名的云目录，**用同一套源码重新上传云函数 / 公共模块 / schema 即可**，代码无需改动。
 - 数据库初始化用 **当前厂商目录下的 `database/*.schema.json`**。
 
@@ -106,10 +106,10 @@ auto-sign-cloud/
 
 ### 3. 部署云函数 + 配置定时触发器
 
-1. 新建云函数 `auto-sign`，把 `uniCloud/cloudfunctions/auto-sign/index.js` 内容粘贴部署
+1. 新建云函数 `auto-sign`，把 `uniCloud-alipay/cloudfunctions/auto-sign/index.js` 内容粘贴部署
 2. 建定时触发器（cron）
 
-> ⚠️ **Qoder 每日 10:00（UTC+8）刷新活动**，Trigger 必须设在 10:00 之后。建议 `0 3 20 * * *`（阿里云 / UTC 20:00 = 北京 04:00）视时钟而定，**确保在北京时间 10:05 后运行**。
+> ⚠️ **Qoder 每日 10:00（UTC+8）刷新活动**，Trigger 必须设在 10:00 之后。当前配置为 `0 1 10 * * *`（每天北京时间 10:01）。
 
 ## 定时说明
 
@@ -140,7 +140,7 @@ auto-sign-cloud/
 ### 新增/改动文件
 
 ```
-uniCloud-aliyun/cloudfunctions/
+uniCloud-alipay/cloudfunctions/
 ├── common/
 │   ├── crypto-util/          # 【新增】公共模块：AES-256-GCM 加解密 / 口令哈希 / 会话token
 │   │   ├── index.js
@@ -176,16 +176,21 @@ common/api.js                 #   跨端统一 callFunction 封装
 
 > v2 是 uni-app + uniCloud 合并工程，请用 **HBuilderX** 打开本项目根目录。
 
-1. **建公共模块**：右键 `uniCloud-aliyun/cloudfunctions/common/crypto-util`、`auth-util` → 上传公共模块
+1. **建公共模块**（注意顺序，被依赖的先传）：右键 `uniCloud-alipay/cloudfunctions/common/crypto-util` → 上传公共模块，再上传 `auth-util`（它依赖 crypto-util）
 2. **部署云函数**：`auto-sign`、`auto-sign-api` 分别上传部署（`auto-sign-api` 依赖公共模块，直接 `require('crypto-util')` / `require('auth-util')`）
-3. **配置密钥**：在 `auto-sign` 与 `auto-sign-api` **两个云函数的环境变量中都设置同一个** `AS_MASTER_KEY=64位hex`（两处值必须完全一致，否则加密/解密不匹配，线上会显示「未配置」或签到失败）
+3. **配置密钥**：在 `auto-sign` 与 `auto-sign-api` **两个云函数的环境变量中都设置同一个** `AS_MASTER_KEY=64位hex`（两处值必须完全一致，否则加密/解密不匹配，线上会显示「未配置」或签到失败；**未设置时云函数会直接报错**，不会静默用占位密钥）
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
-4. **首次登录初始化**：打开 H5 网页 → 输入口令登录（首次自动把该口令设为管理员口令，请牢记）
-5. **导入/更新凭证**：在网页“更新凭证”页粘贴各平台 token（可配合 v1 的 `一键获取签到凭证.bat` 读取，再手动填入）
-6. **手动签到/看状态**：仪表盘一键查看与触发
-7. **发布**：H5 用 uniCloud 前端网页托管；小程序用 `uniCloud.callFunction` 无需额外域名配置
+4. **配置内存规格（重要，省配额）**：在云控制台把 `auto-sign` 与 `auto-sign-api` 的内存从默认 **512MB 改为 128MB**。资源量按「内存 × 运行秒数（GBs）」计费，降到 128MB 后 GBs 消耗降 3/4；签到/查询属轻 I/O 场景，128MB 无副作用。免费版每月 1000 GBs（阿里云/支付宝云相同），512MB 时单次签到约 28 GBs，几天就超限。
+5. **配置定时触发器**：cron `0 1 10 * * *`（北京时间 10:01，必须在 Qoder 10:00 刷新之后）。注意：uniCloud 定时触发为 **at-least-once**，同一次可能重复投递两遍；`auto-sign` 入口已加「当日幂等」（今日 `sign_log` 已有成功记录的平台直接跳过），重复投递不会重复烧 GBs。
+6. **首次登录初始化**：打开 H5 网页 → 输入口令登录（首次自动把该口令设为管理员口令，请牢记）
+   > ⚠️ **部署后立即登录初始化**：settings 不存在时，任何先访问面板的人都能把自己的口令设为管理员（抢注）。
+7. **导入/更新凭证**：在网页“更新凭证”页粘贴各平台 token（可配合 v1 的 `一键获取签到凭证.bat` 读取，再手动填入）
+8. **手动签到/看状态**：仪表盘一键查看与触发
+9. **发布**：H5 用 uniCloud 前端网页托管；小程序用 `uniCloud.callFunction` 无需额外域名配置
+
+> 会话说明：登录会话默认 4 小时有效；会话为单文档存储，**新登录会挤掉旧会话**（多设备会互踢，属预期设计）。
 
 > ⚠️ 资源配额：面板状态查询默认读数据库缓存日志，不做高频轮询；实时接口仅在你点“刷新 / 手动签到”时触发，注意关注免费版每日云函数调用与前端访问量限额。
 
@@ -197,6 +202,18 @@ v1 的 `get-credentials.js` 仍可直接读取本机三平台登录态。v2 面�
 
 - 签到失败看云函数 `auto-sign` 日志
 - 面板接口问题看 `auto-sign-api` 日志（返回 `code`：`0`成功/`401`未登录/`400`参数错/`403`未初始化/`404`未知动作/`500`内部错）
+
+### 排查小节（历史真实踩坑）
+
+| 现象 | 根因 | 解法 |
+|------|------|------|
+| 本地有凭证，线上显示「未配置」或签到报解密失败 | ① `auto-sign` 与 `auto-sign-api` 两函数 `AS_MASTER_KEY` 不一致；② 公共模块改后未重传；③ 换密钥后库里旧密文解不开 | 两函数环境变量设**同一个**密钥；按 crypto-util → auth-util → 云函数顺序重传；面板重新提交一次凭证（重新加密入库） |
+| 云端 `MODULE_NOT_FOUND: crypto-util/auth-util` | 公共模块未上传，或用了相对路径 require 且 package.json 未声明 `file:` 依赖 | 公共模块一律 `require('模块名')` + package.json `file:` 依赖，先传被依赖模块 |
+| 云函数资源量（GBs）几天就超限 | ① 内存 512MB 单价高；② 定时触发 at-least-once 重复投递（日志表现为每天同一 triggerTime 成对出现两次 `TIMER_LATEST`）；③ 三平台串行 + 长重试 sleep + 15s 超时，单次几十秒 | 内存降到 128MB；入口当日幂等跳过已签平台；三平台并行；重试收紧为 2 次（1s/3s）、超时查询 8s/claim 10s |
+| 凌晨手动签到后面板仍显示「待签到」 | `date` 字段曾用 UTC 日期，北京时间 00:00~08:00 写成了「昨天」，缓存匹配失效 | 已修复：`todayCN()` 按 UTC+8 取日期 |
+| Qoder 已签但面板每次刷新都实时查 | 已签/已领取路径不回写 `sign_log`，方案B缓存永不命中 | 已修复：所有「已签/已领取」出口统一回写成功记录 |
+| Qoder 明明可领却报「今日无待领取活动」 | `claimable` 字段判定先于 campaigns 检查的时序坑 | 已修复：以 campaigns 中 CLAIMABLE 活动为准判定 |
+| HBuilderX 改了代码不生效 | 本地调试缓存旧云函数 | 重启本地调试或重新上传部署 |
 ### v2 面板交互增强
 
 - **状态查询（方案 B）**：默认读数据库缓存日志，今日无记录才实时查平台 status 接口；真已签则兜底回写今日 `sign_log`，供下次直接读缓存 —— 既准确又省配额。

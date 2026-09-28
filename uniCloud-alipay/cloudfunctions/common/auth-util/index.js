@@ -7,7 +7,8 @@
  *   - _id: 'settings'  => { adminTokenHash }
  *   - _id: 'sessions'  => { token, expiry, created_at }
  */
-const cc = require('../crypto-util');
+// 公共模块引用规范:require 模块名(非相对路径) + package.json file: 依赖声明,否则云端 MODULE_NOT_FOUND
+const cc = require('crypto-util');
 
 const DB = () => uniCloud.database().collection('auto_sign_admin');
 
