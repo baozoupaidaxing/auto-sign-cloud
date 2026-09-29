@@ -20,6 +20,13 @@ const TRAE_STORAGE = path.join(APPDATA, 'TRAE SOLO CN', 'User', 'globalStorage',
 const CB_STORAGE = path.join(APPDATA, 'CodeBuddy CN', 'User', 'globalStorage', 'storage.json');
 const CB_VSCDB = path.join(APPDATA, 'CodeBuddy CN', 'User', 'globalStorage', 'state.vscdb');
 const CB_LOCAL_STATE = path.join(APPDATA, 'CodeBuddy CN', 'Local State');
+// WorkBuddy 桌面版(5.x)登录态目录:注意在 LOCALAPPDATA(Local),不是 Roaming
+const LOCALAPPDATA = process.env.LOCALAPPDATA || '';
+const WB_AUTH_DIR = path.join(LOCALAPPDATA, 'CodeBuddyExtension', 'Data', 'Public', 'auth');
+const WB_INFO_CANDIDATES = [
+  path.join(WB_AUTH_DIR, 'workbuddy-desktop.info'),
+  path.join(APPDATA, 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop.info'),
+];
 const OUT_FILE = path.join(__dirname, '签到凭证.txt');
 
 // ---------- 通用工具 ----------
@@ -268,45 +275,110 @@ function pickToken(plain) {
   } catch { return t; }
 }
 
-function readWorkBuddy() {
-  // 1) 从 state.vscdb 找到加密 value(扩展以 {"type":"Buffer","data":[...]} 文本存放)
-  const dbBuf = copyFileUnlocked(CB_VSCDB);
-  const rows = readSqliteItemTable(dbBuf);
-  const hit = rows.find(r => r.key === CB_SECRET_KEY);
-  if (!hit) throw new Error('state.vscdb 中未找到 accessToken(确认 CodeBuddy CN 已登录)');
+// WorkBuddy 新版 $wbEncrypted 信封解密占位:
+// 信封结构 = { suite:1, keyId, nonce, authTag, ciphertext }(AES-GCM)。
+// 但 keyId 对应的密钥不在本地任何常规文件(已全盘小文件文本+二进制搜索确认),离线暂无法解密。
+// 若后续逆向拿到密钥,只需在此实现,其余逻辑无需改动。
+let wbEncInfo = null;
+function tryDecryptWbEnvelope(at) {
+  try {
+    const env = JSON.parse(Buffer.from(at.envelope, 'base64').toString('utf8'));
+    wbEncInfo = { keyId: env.keyId || '?', suite: env.suite };
+  } catch { wbEncInfo = { keyId: (at && at.keyId) || '?' }; }
+  return null; // 暂无密钥
+}
 
+// 源A:WorkBuddy 桌面版登录态 workbuddy-desktop.info(Local 优先,Roaming 兜底)
+function readWorkBuddyFromInfo(probed) {
+  for (const p of WB_INFO_CANDIDATES) {
+    if (!p) continue;
+    if (!fs.existsSync(p)) { probed.push(p + ' [不存在]'); continue; }
+    probed.push(p + ' [存在]');
+    let j;
+    try { j = JSON.parse(fs.readFileSync(p, 'utf8')); }
+    catch (e) { probed.push('  解析失败:' + e.message); continue; }
+    const uid = (j.account && j.account.uid) || '';
+    const domain = (j.auth && j.auth.domain) || 'www.codebuddy.cn';
+    const at = j.auth && j.auth.accessToken;
+    if (typeof at === 'string' && at.trim()) {
+      return { accessToken: at.trim(), uid, domain, source: 'workbuddy-desktop.info(明文JWT)' };
+    }
+    if (at && typeof at === 'object' && at.$wbEncrypted) {
+      const plain = tryDecryptWbEnvelope(at);
+      if (plain) return { accessToken: plain, uid, domain, source: 'workbuddy-desktop.info(已解密)' };
+      probed.push('  ⚠ accessToken 为 $wbEncrypted 加密信封(keyId=' + (wbEncInfo && wbEncInfo.keyId) + '),本地无密钥,无法离线解密');
+      continue;
+    }
+    probed.push('  未识别的 accessToken 结构,跳过');
+  }
+  return null;
+}
+
+// 源B:旧版 CodeBuddy CN IDE 插件 state.vscdb(DPAPI + AES-GCM 解密)
+function readWorkBuddyFromCodeBuddyCN(probed) {
+  if (!fs.existsSync(CB_VSCDB)) { probed.push(CB_VSCDB + ' [不存在]'); return null; }
+  probed.push(CB_VSCDB + ' [存在]');
+  let rows;
+  try { rows = readSqliteItemTable(copyFileUnlocked(CB_VSCDB)); }
+  catch (e) { probed.push('  读取失败:' + e.message); return null; }
+  const hit = rows.find(r => r.key === CB_SECRET_KEY);
+  if (!hit) { probed.push('  未找到 planning-genie.new.accessTokencn 活记录(未登录 CodeBuddy CN IDE,或已迁移到 WorkBuddy 桌面版)'); return null; }
   const wrapped = JSON.parse(hit.value.toString('utf8'));
   const encrypted = Buffer.from(wrapped.data);
-
-  // 2) 从 Local State 解出 OSCrypt 主密钥
   const localState = JSON.parse(fs.readFileSync(CB_LOCAL_STATE, 'utf8'));
   const encKeyRaw = Buffer.from(localState.os_crypt.encrypted_key, 'base64');
-  if (encKeyRaw.subarray(0, 5).toString('latin1') !== 'DPAPI') {
-    throw new Error('Local State 密钥格式异常');
-  }
+  if (encKeyRaw.subarray(0, 5).toString('latin1') !== 'DPAPI') throw new Error('Local State 密钥格式异常');
   const aesKey = dpapiDecrypt(encKeyRaw.subarray(5));
-
-  // 3) AES-GCM 解密,明文为账号 JSON:
-  //    { auth: { accessToken: <JWT>, tokenType: 'Bearer' }, account: { uid }, ... }
-  //    注意:顶层 $.accessToken 是 UUID 开头的复合串,不是 Bearer 凭证,不能用
+  // AES-GCM 解密,明文为账号 JSON:{ auth:{ accessToken:<JWT> }, account:{ uid }, ... }
   const plain = chromiumDecrypt(encrypted, aesKey);
-  let accessToken = '';
-  let authUid = '';
+  let accessToken = '', authUid = '';
   try {
     const j = JSON.parse(plain);
     accessToken = j?.auth?.accessToken || j?.token || '';
     authUid = j?.account?.uid || j?.account?.id || '';
   } catch { /* 旧版本可能直接存裸 token */ }
   if (!accessToken) accessToken = pickToken(plain);
-
-  // 4) uid:优先账号 JSON 的 account.uid,回退 storage.json 的 genie.userId
   let uid = authUid;
-  if (!uid) {
+  if (!uid) { try { uid = JSON.parse(fs.readFileSync(CB_STORAGE, 'utf8'))['genie.userId'] || ''; } catch {} }
+  return { accessToken, uid, domain: 'www.codebuddy.cn', source: 'CodeBuddy CN IDE state.vscdb' };
+}
+
+// 源C:同目录旧备份 workbuddy-desktop.*.info 里的明文 token(可能已过期,最后兜底)
+function readWorkBuddyFromBackup(probed) {
+  let files = [];
+  try {
+    files = fs.readdirSync(WB_AUTH_DIR)
+      .filter(n => n.endsWith('.info') && n !== 'workbuddy-desktop.info')
+      .map(n => { const full = path.join(WB_AUTH_DIR, n); return { full, m: fs.statSync(full).mtimeMs }; })
+      .sort((a, b) => b.m - a.m);
+  } catch { return null; }
+  for (const f of files) {
     try {
-      uid = JSON.parse(fs.readFileSync(CB_STORAGE, 'utf8'))['genie.userId'] || '';
+      const j = JSON.parse(fs.readFileSync(f.full, 'utf8'));
+      const at = j.auth && j.auth.accessToken;
+      if (typeof at === 'string' && at.trim()) {
+        probed.push(f.full + ' [旧备份,明文JWT,mtime ' + new Date(f.m).toISOString().slice(0, 10) + ']');
+        return { accessToken: at.trim(), uid: (j.account && j.account.uid) || '', domain: (j.auth && j.auth.domain) || 'www.codebuddy.cn', source: '旧备份 workbuddy-desktop.*.info(可能已过期)', stale: true };
+      }
     } catch {}
   }
-  return { accessToken, uid };
+  return null;
+}
+
+function readWorkBuddy() {
+  const probed = [];
+  // 优先级:当前明文 info > CodeBuddy CN 活记录 > 旧备份明文
+  let r = readWorkBuddyFromInfo(probed);
+  if (!r || !r.accessToken) r = readWorkBuddyFromCodeBuddyCN(probed) || r;
+  if (!r || !r.accessToken) r = readWorkBuddyFromBackup(probed) || r;
+  if (r && r.accessToken) return r;
+
+  let msg = '未找到可用的 WorkBuddy/CodeBuddy 凭证。已探测路径:\n  - ' + probed.join('\n  - ');
+  if (wbEncInfo) {
+    msg += '\n\n根因:WorkBuddy 新版(5.6.x)已把登录态加密为 $wbEncrypted(keyId=' + wbEncInfo.keyId + '),密钥不在本地常规文件,离线无法解密。';
+    msg += '\n可行办法:①在 WorkBuddy 客户端内让内置AI读取 auth.accessToken 明文后手动填入;②安装并登录 CodeBuddy CN IDE 再重跑;③等脚本支持 $wbEncrypted 解密(需逆向密钥库)。';
+  }
+  throw new Error(msg);
 }
 
 function readQoder() {
@@ -446,6 +518,7 @@ async function verifyWorkBuddy(c) {
   }, {});
   if (r.error) return `校验失败(网络:${r.error})`;
   if (r.json?.code === 0) return `有效 ✓(今日${r.json.data?.today_checked_in ? '已签到' : '未签到'}, 连签${r.json.data?.streak_days ?? '-'}天)`;
+  if (r.json?.code === 10001) return `有效 ✓(今日已签到,幂等码 10001)`;
   return `无效/过期 ✗(HTTP ${r.http}:${(r.json?.msg || r.raw || '').slice(0, 120)})`;
 }
 
@@ -494,8 +567,10 @@ if (require.main === module) {
   try {
     wb = readWorkBuddy();
     out('【WorkBuddy / CodeBuddy】');
+    out('  凭证来源   : ' + (wb.source || '未知') + (wb.stale ? '  ⚠️ 旧备份,可能已过期' : ''));
     out('  accessToken: ' + mask(wb.accessToken));
     out('  uid        : ' + (wb.uid || '(未读到,沿用数据库现有值即可)'));
+    if (wb.domain) out('  domain     : ' + wb.domain);
     out('  接口校验   : ' + await verifyWorkBuddy(wb));
   } catch (e) {
     out('【WorkBuddy / CodeBuddy】读取失败:' + e.message);
