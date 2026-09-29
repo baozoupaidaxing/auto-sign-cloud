@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const APPDATA = process.env.APPDATA;
 const TRAE_STORAGE = path.join(APPDATA, 'TRAE SOLO CN', 'User', 'globalStorage', 'storage.json');
@@ -275,17 +275,95 @@ function pickToken(plain) {
   } catch { return t; }
 }
 
-// WorkBuddy 新版 $wbEncrypted 信封解密占位:
-// 信封结构 = { suite:1, keyId, nonce, authTag, ciphertext }(AES-GCM)。
-// 但 keyId 对应的密钥不在本地任何常规文件(已全盘小文件文本+二进制搜索确认),离线暂无法解密。
-// 若后续逆向拿到密钥,只需在此实现,其余逻辑无需改动。
-let wbEncInfo = null;
-function tryDecryptWbEnvelope(at) {
+// WorkBuddy 新版 $wbEncrypted 信封解密:
+// 信封结构 = { suite:1, keyId, nonce, authTag, ciphertext }(AES-256-GCM,带 AAD)。
+// 密钥来源:WorkBuddy.exe 内置原生绑定 electron_browser_workbuddy_storage 的 loggerGet()。
+//   通过 ELECTRON_RUN_AS_NODE 以 Node 模式运行 WorkBuddy.exe,调用该绑定取回密钥载荷
+//   { version, atRestSecretKey, ... };普通 Node 进程无法直接调用 _linkedBinding,故借助其自带二进制。
+// 派生:AES 密钥 = sha256(atRestSecretKey 的 utf8 字节);keyId = sha256(AES密钥).hex 前 16 位。
+// 这样脚本仓库内不内置任何密钥,且密钥随本机 WorkBuddy 安装自动适配(缺失/版本不符则优雅降级)。
+let wbEncInfo = null;      // 诊断用:最近一次信封的 { keyId, suite }
+let wbAtRestKey = null;    // 派生出的 32 字节 AES 密钥(缓存)
+let wbAtRestKeyId = null;  // 对应 keyId(缓存)
+let wbKeyTried = false;    // 是否已尝试取过密钥(避免重复 spawn)
+
+// 定位 WorkBuddy.exe(用户级安装优先,机器级兜底)
+function findWorkBuddyExe() {
+  const cands = [
+    LOCALAPPDATA && path.join(LOCALAPPDATA, 'Programs', 'WorkBuddy', 'WorkBuddy.exe'),
+    'C:\\Program Files\\WorkBuddy\\WorkBuddy.exe',
+    'C:\\Program Files (x86)\\WorkBuddy\\WorkBuddy.exe',
+  ];
+  for (const c of cands) { try { if (c && fs.existsSync(c)) return c; } catch {} }
+  return null;
+}
+
+// 借助 WorkBuddy.exe(Node 模式)调用原生绑定取回 at-rest 密钥并派生 AES 密钥(仅执行一次)
+function loadWbAtRestKey(probed) {
+  if (wbKeyTried) return wbAtRestKey;
+  wbKeyTried = true;
+  const exe = findWorkBuddyExe();
+  if (!exe) { probed && probed.push('  ⚠ 未找到 WorkBuddy.exe,无法取 $wbEncrypted 解密密钥'); return null; }
+  const inline = "try{var b=process._linkedBinding('electron_browser_workbuddy_storage');process.stdout.write(b.loggerGet())}catch(e){process.stdout.write('ERR:'+e.message)}";
+  let out = '';
   try {
-    const env = JSON.parse(Buffer.from(at.envelope, 'base64').toString('utf8'));
-    wbEncInfo = { keyId: env.keyId || '?', suite: env.suite };
-  } catch { wbEncInfo = { keyId: (at && at.keyId) || '?' }; }
-  return null; // 暂无密钥
+    out = execFileSync(exe, ['-e', inline], {
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      encoding: 'utf8', timeout: 20000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (e) {
+    if (e && e.stdout) out = e.stdout;
+    else { probed && probed.push('  ⚠ 调用 WorkBuddy.exe 取密钥失败:' + (e && e.message)); return null; }
+  }
+  let payload;
+  try { payload = JSON.parse(out); }
+  catch { probed && probed.push('  ⚠ WorkBuddy.exe 未返回密钥载荷(' + String(out).slice(0, 60) + ')'); return null; }
+  if (!payload || typeof payload.atRestSecretKey !== 'string') { probed && probed.push('  ⚠ 密钥载荷缺少 atRestSecretKey'); return null; }
+  wbAtRestKey = crypto.createHash('sha256').update(payload.atRestSecretKey, 'utf8').digest();
+  wbAtRestKeyId = crypto.createHash('sha256').update(wbAtRestKey).digest('hex').slice(0, 16);
+  probed && probed.push('  ✓ 已从 WorkBuddy.exe 取得 at-rest 密钥(keyId=' + wbAtRestKeyId + ')');
+  return wbAtRestKey;
+}
+
+// 构造 sym-v1 + field framing 的 AAD(与 WorkBuddy AtRestCrypto.buildAuthenticatedContextAad 逐字节一致)
+function wbBuildFieldAad(keyId, suite) {
+  const u32 = (n) => { const b = Buffer.allocUnsafe(4); b.writeUInt32BE(n >>> 0); return b; };
+  const lp = (s) => { const b = Buffer.from(s, 'utf8'); return Buffer.concat([u32(b.length), b]); };
+  return Buffer.concat([
+    Buffer.from('WB-AAD\0', 'ascii'), // AAD_DOMAIN
+    Buffer.from([1]),                 // 版本字节
+    lp('WBEV1'),                      // STANDARD_FORMAT_ID.field
+    lp('sym-v1'),                     // scheme
+    u32(suite),                       // suite
+    lp(keyId),                        // keyId(16 位十六进制字符串)
+    Buffer.from([2]),                 // FRAMING_CODE.field
+    Buffer.from([0]),                 // sequence: undefined -> [0x00]
+    Buffer.from([0]),                 // final: undefined -> [0x00]
+  ]);
+}
+
+// 解密单个 $wbEncrypted 信封,成功返回明文字符串,失败返回 null
+function tryDecryptWbEnvelope(at, probed) {
+  let env;
+  try { env = JSON.parse(Buffer.from(at.envelope, 'base64').toString('utf8')); }
+  catch { wbEncInfo = { keyId: (at && at.keyId) || '?' }; return null; }
+  wbEncInfo = { keyId: env.keyId || '?', suite: env.suite };
+  const key = loadWbAtRestKey(probed);
+  if (!key) return null;
+  if (env.keyId && wbAtRestKeyId && env.keyId !== wbAtRestKeyId) {
+    probed && probed.push('  ⚠ 信封 keyId=' + env.keyId + ' 与本机密钥 keyId=' + wbAtRestKeyId + ' 不一致(WorkBuddy 版本可能已轮换密钥)');
+    return null;
+  }
+  try {
+    const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(env.nonce, 'base64'), { authTagLength: 16 });
+    d.setAAD(wbBuildFieldAad(env.keyId, env.suite));
+    d.setAuthTag(Buffer.from(env.authTag, 'base64'));
+    const plain = Buffer.concat([d.update(Buffer.from(env.ciphertext, 'base64')), d.final()]).toString('utf8');
+    return plain || null;
+  } catch (e) {
+    probed && probed.push('  ⚠ $wbEncrypted 解密失败:' + e.message);
+    return null;
+  }
 }
 
 // 源A:WorkBuddy 桌面版登录态 workbuddy-desktop.info(Local 优先,Roaming 兜底)
@@ -304,9 +382,9 @@ function readWorkBuddyFromInfo(probed) {
       return { accessToken: at.trim(), uid, domain, source: 'workbuddy-desktop.info(明文JWT)' };
     }
     if (at && typeof at === 'object' && at.$wbEncrypted) {
-      const plain = tryDecryptWbEnvelope(at);
-      if (plain) return { accessToken: plain, uid, domain, source: 'workbuddy-desktop.info(已解密)' };
-      probed.push('  ⚠ accessToken 为 $wbEncrypted 加密信封(keyId=' + (wbEncInfo && wbEncInfo.keyId) + '),本地无密钥,无法离线解密');
+      const plain = tryDecryptWbEnvelope(at, probed);
+      if (plain) return { accessToken: plain.trim(), uid, domain, source: 'workbuddy-desktop.info($wbEncrypted已解密)' };
+      probed.push('  ⚠ accessToken 为 $wbEncrypted 加密信封(keyId=' + (wbEncInfo && wbEncInfo.keyId) + '),解密未成功');
       continue;
     }
     probed.push('  未识别的 accessToken 结构,跳过');
@@ -375,8 +453,9 @@ function readWorkBuddy() {
 
   let msg = '未找到可用的 WorkBuddy/CodeBuddy 凭证。已探测路径:\n  - ' + probed.join('\n  - ');
   if (wbEncInfo) {
-    msg += '\n\n根因:WorkBuddy 新版(5.6.x)已把登录态加密为 $wbEncrypted(keyId=' + wbEncInfo.keyId + '),密钥不在本地常规文件,离线无法解密。';
-    msg += '\n可行办法:①在 WorkBuddy 客户端内让内置AI读取 auth.accessToken 明文后手动填入;②安装并登录 CodeBuddy CN IDE 再重跑;③等脚本支持 $wbEncrypted 解密(需逆向密钥库)。';
+    msg += '\n\n根因:WorkBuddy 新版(5.6.x)已把登录态加密为 $wbEncrypted(keyId=' + wbEncInfo.keyId + ')。';
+    msg += '\n本脚本已尝试调用 WorkBuddy.exe 内置密钥解密但未成功(可能未安装 WorkBuddy 桌面版、版本不匹配或密钥已轮换)。';
+    msg += '\n可行办法:①确认已安装并登录 WorkBuddy 桌面版后重跑;②在 WorkBuddy 客户端内让内置AI读取 auth.accessToken 明文后手动填入;③安装并登录 CodeBuddy CN IDE 再重跑。';
   }
   throw new Error(msg);
 }
