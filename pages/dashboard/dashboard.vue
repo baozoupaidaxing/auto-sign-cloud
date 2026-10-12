@@ -21,8 +21,9 @@
         <view class="row sub">
           <text class="cred">{{ item.masked || '(未配置凭证)' }}</text>
           <text class="exp" v-if="item.configured">{{ expText(item) }}</text>
-          <text class="signbtn" @click="checkinOne(item.platform)" :class="{ disabled: item.checkedIn }">{{ item.checkedIn ? '已签到' : '手动签到' }}</text>
+          <text class="signbtn" @click="checkinOne(item.platform)" :class="{ disabled: item.checkedIn || item.credentialInvalid }">{{ item.checkedIn ? '已签到' : '手动签到' }}</text>
         </view>
+        <view v-if="item.credentialInvalid" class="hint-bad">凭证已失效：请点下方「更新凭证」重新填写 accessToken</view>
         <view v-if="item.lastSign" class="last line2">
           最近：{{ item.lastSign.date }} · {{ item.lastSign.message }}
         </view>
@@ -37,13 +38,16 @@
 import api from '@/common/api.js';
 const NAMED = { trae: 'Trae', workbuddy: 'WorkBuddy', qoder: 'Qoder' };
 export default {
-  data() { return { list: [], loading: true, checking: false, lastRefresh: 0 }; },
+  data() { return { list: [], loading: true, checking: false, lastRefresh: 0, entered: false }; },
   onLoad() { this.refresh(); },
+  // 从"更新凭证"页返回后自动刷新(uni-app 返回不触发 onLoad;首次进入 onShow 紧跟 onLoad,跳过以免重复请求)
+  onShow() { if (this.entered) this.refresh(); this.entered = true; },
   computed: {
-    // 全部已签(或无可签平台) => 置灰
-    allSigned() { return !this.list.some(x => x.configured && x.enable !== false && !x.checkedIn); }
+    // 全部已签(或无可签平台) => 置灰;凭证失效的平台不可签,不计入
+    allSigned() { return !this.list.some(x => this.signable(x)); }
   },
   methods: {
+    signable(x) { return x.configured && x.enable !== false && !x.checkedIn && !x.credentialInvalid; },
     nameOf(p) { return NAMED[p] || p; },
     expText(item) {
       if (item.configured === false) return '(未配置凭证)';
@@ -57,11 +61,13 @@ export default {
     statusText(item) {
       if (!item.configured) return '未配置';
       if (item.enable === false) return '已禁用';
+      if (item.credentialInvalid) return '凭证失效';
       if (item.checkedIn) return '今日已签';
       return '待签到';
     },
     statusClass(item) {
       if (!item.configured || item.enable === false) return 'off';
+      if (item.credentialInvalid) return 'bad';
       if (item.checkedIn) return 'done';
       return 'todo';
     },
@@ -83,7 +89,7 @@ export default {
     checkinOne(platform) {
       if (this.checking) return;
       const it = this.list.find(x => x.platform === platform);
-      if (it && it.checkedIn) return; // 已签则不再重复签到
+      if (it && (it.checkedIn || it.credentialInvalid)) return;
       this.checking = true;
       uni.showLoading({ title: '签到中...' });
       api.checkin(platform).then(() => { uni.hideLoading(); uni.showToast({ title: '完成', icon: 'success' }); this.refresh(); })
@@ -91,7 +97,7 @@ export default {
     },
     checkinAll() {
       if (this.checking || this.allSigned) return;
-      const todo = this.list.filter(x => x.configured && x.enable !== false && !x.checkedIn).map(x => x.platform);
+      const todo = this.list.filter(x => this.signable(x)).map(x => x.platform);
       if (!todo.length) return;
       this.checking = true;
       uni.showLoading({ title: '签到未签平台...' });
@@ -122,6 +128,8 @@ export default {
 .status.done { background: #e1f6e6; color: #1f8f44; }
 .status.todo { background: #fff4e0; color: #d9820b; }
 .status.off { background: #f0f0f0; color: #888; }
+.status.bad { background: #fdecea; color: #c0392b; }
+.hint-bad { margin-top: 12rpx; font-size: 24rpx; color: #c0392b; line-height: 1.5; }
 .row.sub { margin-top: 16rpx; }
 .cred { font-size: 26rpx; color: #666; }
 .exp { font-size: 22rpx; color: #999; margin-left: 12rpx; flex-shrink: 0; }

@@ -137,7 +137,7 @@ async function doStatus(db) {
         const s = st[p];
         const item = list.find(x => x.platform === p);
         if (!item || !s) continue;
-        if (s.todayCheckedIn) {
+        if (s.todayCheckedIn === true) {
           item.checkedIn = true;
           item.lastSign = { success: true, message: s.message || '已签到', date: today, created_at: Date.now() };
           // upsert 今日记录:有则 update,无则 add
@@ -151,7 +151,15 @@ async function doStatus(db) {
             }
           } catch (e) {}
         } else {
-          item.lastSign = item.lastSign || { success: false, message: s.message || '今日未签到', date: today };
+          // 实时查询未签/失败:如实回传原因,绝不写"成功"记录
+          // (历史 bug:Qoder 401 被当成"已领取"回写 success=true,面板整日显示"今日已签"且无法补签)
+          if (s.credentialInvalid) item.credentialInvalid = true;
+          item.lastSign = {
+            success: false,
+            message: s.message || '今日未签到',
+            date: today,
+            created_at: (item.lastSign && item.lastSign.created_at) || Date.now()
+          };
         }
       }
     } catch (e) {}
