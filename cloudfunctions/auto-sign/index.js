@@ -14,6 +14,19 @@
  *   3. 超时收紧:查询类 8s / claim 类 10s;Trae 9074 重试收紧为 2 次(sleep 1s/3s)
  *   4. date 字段改用北京时间(UTC+8),修复凌晨写库日期错一天
  *   5. Qoder:修复 claimable 判定先于 campaigns 检查的时序坑;已签/已领取出口统一回写 sign_log
+ *
+ * 2026-10-12 修复(假成功,与 v2 ff93070 对齐):
+ *   1. Qoder 401/TOKEN_EXPIRE 被误判为"今日已领取或无可领取活动"并写入 sign_log(success=true)
+ *      → 新增"响应校验先于语义判定":HTTP 401/403、非 200、业务错误码一律判失败,不写日志
+ *   2. Qoder claim 阶段的硬错误(401/网络)不再被粉饰成"今日已领取(无新增)"
+ *   3. Trae/WorkBuddy:401/超时不再输出 code=undefined,统一提示"凭证已失效,请更新凭证"
+ *
+ * 2026-10-12 日志可读性(并行日志分不清归属):
+ *   1. postRequest/getRequest 新增 tag 参数,所有请求/响应日志带 `[平台] ` 前缀
+ *      —— 三平台 Promise.allSettled 并行,原日志只有 2 空格缩进,无法归属
+ *   2. 响应体改打"紧凑单行 JSON"(完整且量小),解析失败才回落压缩后的原文
+ *      —— 原样打 pretty JSON 会让一条响应横跨多行,与别家日志交错后彻底糊掉
+ *   3. 删除调用点 7 处重复的响应打印(helper 已打,调用点又打一遍)
  */
 
 const https = require('https');
@@ -31,12 +44,21 @@ const TIMEOUT_CLAIM = 10000;
 // 今日日期(北京时间 UTC+8):云函数容器为 UTC,直接 toISOString 在 00:00~08:00 会得到"昨天"
 const todayCN = () => new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 
+// 日志用:把响应体压成单行,避免后端格式化 JSON 的换行把一条日志撑成多行
+// (三平台并行时,多行响应体与别家日志交错,会彻底看不出归属)
+function oneLine(s) {
+  return String(s == null ? '' : s).replace(/\s*\n\s*/g, ' ').slice(0, 1000);
+}
+
 // ---------- HTTP POST ----------
-function postRequest(url, headers, body, timeout = TIMEOUT_QUERY) {
+// tag:平台名(如 'Qoder'),用于给并发日志打标识 —— 三平台 Promise.allSettled 并行,
+//      不加 tag 时 "[GET] .../  响应:" 交给谁全靠猜
+function postRequest(url, headers, body, timeout = TIMEOUT_QUERY, tag = '') {
+  const p = tag ? `[${tag}] ` : '';
   return new Promise((resolve) => {
     const u = new URL(url);
     const payload = Buffer.from(JSON.stringify(body || {}));
-    log(`[POST] ${url}`);
+    log(`${p}[POST] ${url}`);
     const req = https.request({
       hostname: u.hostname,
       port: u.port || 443,
@@ -51,13 +73,13 @@ function postRequest(url, headers, body, timeout = TIMEOUT_QUERY) {
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        log(`  HTTP ${res.statusCode}`);
-        log(`  响应: ${raw.slice(0, 1000)}`);
-        try {
-          resolve({ ok: true, http: res.statusCode, json: JSON.parse(raw), raw });
-        } catch {
-          resolve({ ok: true, http: res.statusCode, raw });
-        }
+        log(`${p}  HTTP ${res.statusCode}`);
+        // 响应体:能解析就打"紧凑单行 JSON"(量小且完整),否则回落压缩后的原文。
+        // 调用点原先各自再打印一遍响应(重复),已删除 —— 故此处必须打全,不能只靠截断原文。
+        let json;
+        try { json = JSON.parse(raw); } catch { json = undefined; }
+        log(`${p}  响应: ${json !== undefined ? JSON.stringify(json).slice(0, 1000) : oneLine(raw)}`);
+        resolve(json !== undefined ? { ok: true, http: res.statusCode, json, raw } : { ok: true, http: res.statusCode, raw });
       });
     });
     req.on('error', e => resolve({ ok: false, error: e.message }));
@@ -70,10 +92,11 @@ function postRequest(url, headers, body, timeout = TIMEOUT_QUERY) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- HTTP GET ----------
-function getRequest(url, headers, timeout = TIMEOUT_QUERY) {
+function getRequest(url, headers, timeout = TIMEOUT_QUERY, tag = '') {
+  const p = tag ? `[${tag}] ` : '';
   return new Promise((resolve) => {
     const u = new URL(url);
-    log(`[GET] ${url}`);
+    log(`${p}[GET] ${url}`);
     const req = https.request({
       hostname: u.hostname,
       port: u.port || 443,
@@ -85,19 +108,61 @@ function getRequest(url, headers, timeout = TIMEOUT_QUERY) {
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        log(`  HTTP ${res.statusCode}`);
-        log(`  响应: ${raw.slice(0, 1000)}`);
-        try {
-          resolve({ ok: true, http: res.statusCode, json: JSON.parse(raw), raw });
-        } catch {
-          resolve({ ok: true, http: res.statusCode, raw });
-        }
+        log(`${p}  HTTP ${res.statusCode}`);
+        // 响应体:能解析就打"紧凑单行 JSON"(量小且完整),否则回落压缩后的原文。
+        // 调用点原先各自再打印一遍响应(重复),已删除 —— 故此处必须打全,不能只靠截断原文。
+        let json;
+        try { json = JSON.parse(raw); } catch { json = undefined; }
+        log(`${p}  响应: ${json !== undefined ? JSON.stringify(json).slice(0, 1000) : oneLine(raw)}`);
+        resolve(json !== undefined ? { ok: true, http: res.statusCode, json, raw } : { ok: true, http: res.statusCode, raw });
       });
     });
     req.on('error', e => resolve({ ok: false, error: e.message }));
     req.setTimeout(timeout, () => req.destroy(new Error('timeout')));
     req.end();
   });
+}
+
+// ---------- 响应校验(核心:避免把 401/业务错误码误判成"今日已签") ----------
+// 传输层/HTTP 层错误。成功响应必然是 HTTP 200,故 4xx/5xx 一律判错。
+function httpErr(res, label) {
+  if (!res) return { message: `${label} 无响应`, credentialInvalid: false };
+  if (res.ok === false) return { message: `${label} 请求失败: ${res.error || '网络错误/超时'}`, credentialInvalid: false };
+  if (res.http === 401 || res.http === 403) {
+    const j = res.json || {};
+    return {
+      message: `${label} 凭证已失效(${j.code || j.message || ('HTTP ' + res.http)}),请更新凭证`,
+      credentialInvalid: true
+    };
+  }
+  if (res.http !== 200) return { message: `${label} 接口异常: HTTP ${res.http}`, credentialInvalid: false };
+  return null;
+}
+
+const AUTH_CODE_RE = /TOKEN|AUTH|UNAUTHORIZED|EXPIRE|LOGIN/i;
+
+// 传输层错误 + 业务错误码(code 存在且非 0)。
+// 用于结构未知的接口(如 Qoder campaigns):校验必须先于语义判定 ——
+// 否则 401 响应里根本没有 campaigns 字段,会被读成"无可领取活动" => 假成功。
+function respErr(res, label) {
+  const e = httpErr(res, label);
+  if (e) return e;
+  const j = res.json;
+  if (!j || typeof j !== 'object') return { message: `${label} 响应无法解析: ${String(res.raw || '').slice(0, 200)}`, credentialInvalid: false };
+  const code = j.code;
+  if (code === undefined || code === null || code === 0 || code === '0') return null;
+  const detail = j.message || j.msg || '';
+  const authish = AUTH_CODE_RE.test(String(code) + ' ' + String(detail));
+  return {
+    message: `${label} ${authish ? '凭证已失效' : '接口返回错误'}[${code}${detail ? ': ' + detail : ''}]${authish ? ',请更新凭证' : ''}`,
+    credentialInvalid: authish
+  };
+}
+
+function mkErr(message, credentialInvalid) {
+  const e = new Error(message);
+  e.credentialInvalid = !!credentialInvalid;
+  return e;
 }
 
 // ---------- 主入口 ----------
@@ -138,7 +203,7 @@ exports.main = async function (event, context) {
       log(`[结果] ${platform}: ${s.value && s.value.message}`);
     } else {
       const msg = (s.reason && s.reason.message) || String(s.reason);
-      results[platform] = { success: false, message: msg };
+      results[platform] = { success: false, message: msg, credentialInvalid: !!(s.reason && s.reason.credentialInvalid) };
       log(`[异常] ${platform}: ${msg}`);
     }
   });
@@ -185,9 +250,18 @@ async function checkinQoder(cfg, db) {
   const list = await getRequest(
     `${base}/sash/api/v1/me/campaigns`,
     ctHeaders,
-    TIMEOUT_QUERY
+    TIMEOUT_QUERY,
+    'Qoder'
   );
-  log(`[Qoder campaigns] ${JSON.stringify(list.json || list.raw)}`);
+
+  // ★先校验响应本身:401/TOKEN_EXPIRE 等错误响应里没有 campaigns 字段,
+  //   若直接进语义判定会被读成"无可领取活动" => 误报"今日已领取"并污染 sign_log
+  //   (被污染后:当日幂等跳过该平台,当日无法恢复)
+  const qErr = respErr(list, 'Qoder campaigns');
+  if (qErr) {
+    log(`[结果] qoder: ${qErr.message}`);
+    return { success: false, credentialInvalid: qErr.credentialInvalid, message: qErr.message };
+  }
 
   // 找可领取的 CLAIM_BENEFIT campaign(每天 campaignId 会变)
   const campaigns = ((list.json && list.json.campaigns) || []).filter(c =>
@@ -205,7 +279,7 @@ async function checkinQoder(cfg, db) {
   }
 
   // 2. 逐个领取 CLAIMABLE 的活动
-  let claimed = 0, totalCredit = 0;
+  let claimed = 0, totalCredit = 0, claimFail = null;
   for (const camp of campaigns) {
     const cid = camp.campaignId;
     const amount = camp.benefit?.amount || 0;
@@ -214,21 +288,34 @@ async function checkinQoder(cfg, db) {
       `${base}/sash/api/v1/me/campaigns/${cid}/claim`,
       Object.assign({}, ctHeaders, { 'Content-Type': 'application/json' }),
       {},
-      TIMEOUT_CLAIM
+      TIMEOUT_CLAIM,
+      'Qoder'
     );
-    log(`[Qoder claim] ${JSON.stringify(claim.json || claim.raw)}`);
+
+    // 硬错误(401/网络/5xx)不计入"已领取",否则又会退化成假成功
+    const cErr = httpErr(claim, `Qoder claim(${cid})`);
+    if (cErr) {
+      claimFail = cErr;
+      log(`[Qoder] 活动 ${cid} 领取失败: ${cErr.message}`);
+      continue;
+    }
 
     if (claim.json && claim.json.status === 'CLAIMED') {
       claimed++;
       totalCredit += amount;
     } else if (claim.json && claim.json.replayed === true) {
-      continue; // 已领取,跳过
+      log(`[Qoder] 活动 ${cid} 已领取过(replayed),跳过`); // 已领取,跳过
     } else {
+      claimFail = { message: `活动 ${cid} 领取失败: ${(claim.json && (claim.json.message || claim.json.code)) || claim.raw || '未知响应'}`, credentialInvalid: false };
       log(`[Qoder] 活动 ${cid} 领取失败: ${JSON.stringify(claim.json || claim.raw)}`);
     }
   }
 
   if (claimed === 0) {
+    // 有真实失败原因时如实上报,不再统一粉饰成"已领取"
+    if (claimFail) {
+      return { success: false, credentialInvalid: claimFail.credentialInvalid, message: `Qoder 领取失败: ${claimFail.message}` };
+    }
     await writeSignLog(db, 'qoder', true, '今日已领取(无新增)'); // 回写,保证入口当日幂等能命中
     return { success: true, message: '今日已领取(无新增)', alreadyCheckedIn: true };
   }
@@ -260,12 +347,17 @@ async function checkinTrae(cfg, db) {
   log('[Trae] 查询签到状态...');
   const status = await postRequest(
     `${base}/trae/api/v2/ug/checkin_credits/status`,
-    headers, postBody, TIMEOUT_QUERY
+    headers, postBody, TIMEOUT_QUERY, 'Trae'
   );
-  log(`[Trae status] ${JSON.stringify(status.json || status.raw)}`);
+
+  // ★先校验响应本身(401/非 200/网络错误),再进语义判定
+  const traeHttpErr = httpErr(status, 'Trae status');
+  if (traeHttpErr) throw mkErr(traeHttpErr.message, traeHttpErr.credentialInvalid);
 
   if (!status.json || status.json.code !== 0) {
-    throw new Error(`status 异常: code=${status.json?.code}, msg=${status.json?.message || status.raw}`);
+    const detail = (status.json && (status.json.message || status.json.msg)) || status.raw;
+    const authish = !!status.json && (status.json.enable === false || AUTH_CODE_RE.test(String(status.json.code) + ' ' + String(detail)));
+    throw mkErr(`status 异常: code=${status.json && status.json.code}, msg=${detail}` + (authish ? ' (凭证已失效,请更新凭证)' : ''), authish);
   }
 
   if (status.json.enable === false) {
@@ -286,9 +378,8 @@ async function checkinTrae(cfg, db) {
     log(`[Trae] 调用 claim 接口(第${i + 1}次)...`);
     const claim = await postRequest(
       `${base}/trae/api/v2/ug/checkin_credits/claim`,
-      headers, postBody, TIMEOUT_CLAIM
+      headers, postBody, TIMEOUT_CLAIM, 'Trae'
     );
-    log(`[Trae claim 第${i + 1}次] ${JSON.stringify(claim.json || claim.raw)}`);
 
     if (claim.json && claim.json.code === 0) {
       const points = claim.json.data?.points || claim.json.points || status.json.credits || 200;
@@ -312,9 +403,8 @@ async function checkinTrae(cfg, db) {
       log('[Trae] 重试用尽,回查 status...');
       const reCheck = await postRequest(
         `${base}/trae/api/v2/ug/checkin_credits/status`,
-        headers, postBody, TIMEOUT_QUERY
+        headers, postBody, TIMEOUT_QUERY, 'Trae'
       );
-      log(`[Trae reCheck] ${JSON.stringify(reCheck.json || reCheck.raw)}`);
       if (reCheck.json && (reCheck.json.checked_in === true || reCheck.json.did_checked_in === true)) {
         await writeSignLog(db, 'trae', true, '今日已签到(claim 限流但回查已到账)');
         return { success: true, message: '今日已签到(claim 限流但回查已到账)', alreadyCheckedIn: true };
@@ -345,12 +435,17 @@ async function checkinWorkBuddy(cfg, db) {
   log('[WorkBuddy] 查询签到状态...');
   const status = await postRequest(
     `${base}/v2/billing/meter/checkin-activity-status`,
-    headers, {}, TIMEOUT_QUERY
+    headers, {}, TIMEOUT_QUERY, 'WorkBuddy'
   );
-  log(`[WorkBuddy status] ${JSON.stringify(status.json || status.raw)}`);
+
+  // ★先校验响应本身(401/非 200/网络错误),再进语义判定
+  const wbHttpErr = httpErr(status, 'WorkBuddy status');
+  if (wbHttpErr) throw mkErr(wbHttpErr.message, wbHttpErr.credentialInvalid);
 
   if (!status.json || status.json.code !== 0) {
-    throw new Error(`status 异常: code=${status.json?.code}, msg=${status.json?.msg || status.raw}`);
+    const detail = (status.json && (status.json.msg || status.json.message)) || status.raw;
+    const authish = !!status.json && AUTH_CODE_RE.test(String(status.json.code) + ' ' + String(detail));
+    throw mkErr(`status 异常: code=${status.json && status.json.code}, msg=${detail}` + (authish ? ' (凭证已失效,请更新凭证)' : ''), authish);
   }
 
   if (status.json.data?.active === false) {
@@ -367,9 +462,8 @@ async function checkinWorkBuddy(cfg, db) {
   log('[WorkBuddy] 调用 claim 接口...');
   const claim = await postRequest(
     `${base}/v2/billing/meter/daily-checkin`,
-    headers, {}, TIMEOUT_CLAIM
+    headers, {}, TIMEOUT_CLAIM, 'WorkBuddy'
   );
-  log(`[WorkBuddy claim] ${JSON.stringify(claim.json || claim.raw)}`);
 
   if (claim.json && claim.json.code === 0) {
     const credit = claim.json.data?.credit || 0;
