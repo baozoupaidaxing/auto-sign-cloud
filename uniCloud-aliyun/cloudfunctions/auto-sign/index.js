@@ -263,19 +263,22 @@ async function checkinQoder(cfg, db) {
     return { success: false, credentialInvalid: qErr.credentialInvalid, message: qErr.message };
   }
 
-  // 找可领取的 CLAIM_BENEFIT campaign(每天 campaignId 会变)
-  const campaigns = ((list.json && list.json.campaigns) || []).filter(c =>
-    c && c.actionType === 'CLAIM_BENEFIT' && c.claimStatus === 'CLAIMABLE'
+  // 找 CLAIM_BENEFIT campaign(每天 campaignId 会变),区分"可领取"与"已领取"
+  const allClaim = ((list.json && list.json.campaigns) || []).filter(c =>
+    c && c.actionType === 'CLAIM_BENEFIT'
   );
+  const campaigns = allClaim.filter(c => c.claimStatus === 'CLAIMABLE');
+  const claimedCamps = allClaim.filter(c => c.claimStatus === 'CLAIMED');
 
-  // 时序修复:不再以 claimable!==true 直接判失败(claimable 判定先于 campaigns 是历史坑),以 campaigns 实际状态为准
+  // 以 campaigns 实际状态为准:CLAIMED => 今日已领取(签到成功,幂等);
+  // 既无 CLAIMABLE 也无 CLAIMED 才判"活动未开启",避免把已领取误报成未开启
   if (campaigns.length === 0) {
-    if (list.json && list.json.claimable === false) {
-      return { success: false, message: '今日无待领取活动或活动未开启' };
+    if (claimedCamps.length > 0) {
+      const msg = '今日已领取(签到成功,幂等)';
+      await writeSignLog(db, 'qoder', true, msg); // 回写,保证入口当日幂等能命中
+      return { success: true, message: msg, alreadyCheckedIn: true };
     }
-    const msg = '今日已领取或无可领取活动';
-    await writeSignLog(db, 'qoder', true, msg); // 已领取也回写,保证入口当日幂等能命中
-    return { success: true, message: msg, alreadyCheckedIn: true };
+    return { success: false, message: '今日无待领取活动或活动未开启' };
   }
 
   // 2. 逐个领取 CLAIMABLE 的活动
