@@ -16,7 +16,20 @@ const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 
 const APPDATA = process.env.APPDATA;
-const TRAE_STORAGE = path.join(APPDATA, 'TRAE SOLO CN', 'User', 'globalStorage', 'storage.json');
+// Trae 用户数据目录：新版(2026-10 升级后)为 "Trae CN"，旧版为 "TRAE SOLO CN"
+// 按顺序探测，取第一个存在的；升级迁移后旧目录只剩 logs
+const TRAE_APP_DIRS = [
+  path.join(APPDATA, 'Trae CN'),
+  path.join(APPDATA, 'TRAE SOLO CN')
+];
+function traePath(rel) {
+  for (const dir of TRAE_APP_DIRS) {
+    const p = path.join(dir, rel);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+const TRAE_STORAGE = traePath(path.join('User', 'globalStorage', 'storage.json'));
 const CB_STORAGE = path.join(APPDATA, 'CodeBuddy CN', 'User', 'globalStorage', 'storage.json');
 const CB_VSCDB = path.join(APPDATA, 'CodeBuddy CN', 'User', 'globalStorage', 'state.vscdb');
 const CB_LOCAL_STATE = path.join(APPDATA, 'CodeBuddy CN', 'Local State');
@@ -74,7 +87,12 @@ function traeDecryptEnvelope(b64) {
 }
 
 function readTrae() {
-  const storage = JSON.parse(fs.readFileSync(TRAE_STORAGE, 'utf8'));
+  // Trae 升级后数据目录迁移，运行时再探测一次（脚本加载时可能客户端尚未启动）
+  const storagePath = traePath(path.join('User', 'globalStorage', 'storage.json'));
+  if (!storagePath) {
+    throw new Error('未找到 Trae storage.json（已探测: ' + TRAE_APP_DIRS.join(' / ') + '）。请确认 Trae 客户端已登录，且数据目录存在');
+  }
+  const storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
   const auth = traeDecryptEnvelope(storage['iCubeAuthInfo://icube.cloudide']);
   // 调试:打印 envelope payload 的所有字段名,帮助发现遗漏的字段(如 host)
   console.log('[Trae envelope 字段列表]:', Object.keys(auth).join(', '));
@@ -87,11 +105,13 @@ function readTrae() {
   const userRegion = auth.userRegion?.region || '';
 
   // deviceId:从 local_env.json 读取(和官方客户端一致)
-  const localEnvPath = path.join(process.env.APPDATA, 'TRAE SOLO CN', 'ModularData', 'ckg_server', 'local_env.json');
+  const localEnvPath = traePath(path.join('ModularData', 'ckg_server', 'local_env.json'));
   let deviceId = storage['telemetry.devDeviceId'];
   try {
-    const localEnv = JSON.parse(fs.readFileSync(localEnvPath, 'utf8'));
-    if (localEnv.device_id) deviceId = localEnv.device_id;
+    if (localEnvPath) {
+      const localEnv = JSON.parse(fs.readFileSync(localEnvPath, 'utf8'));
+      if (localEnv.device_id) deviceId = localEnv.device_id;
+    }
   } catch (e) {
     console.log('[Trae] local_env.json 读取失败,回退 telemetry.devDeviceId:', e.message);
   }

@@ -72,7 +72,7 @@ auto-sign-cloud/
 
 | 平台 | 凭证存放位置 | 鉴权方式 |
 |------|-------------|----------|
-| Trae | `%APPDATA%\TRAE SOLO CN\...\storage.json`（envelope 加密） | `Cloud-IDE-JWT <token>` + `x-device-id` |
+| Trae | `%APPDATA%\Trae CN\User\globalStorage\storage.json`（envelope 加密） | `Cloud-IDE-JWT <token>` + `x-device-id` |
 | WorkBuddy | `%APPDATA%\CodeBuddy CN\...\state.vscdb`（OSCrypt） | `Bearer <token>` + `X-User-Id` |
 | Qoder | `%APPDATA%\QoderCN\...\state.vscdb`（OSCrypt） | `Bearer <token>` + `Cosy-ClientType: 10` |
 
