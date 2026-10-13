@@ -8,3 +8,6 @@ qoder-claim.js
 
 # Node
 node_modules/
+
+# HBuilderX 工程缓存
+.hbuilderx/
